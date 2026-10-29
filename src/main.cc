@@ -395,8 +395,14 @@ static std::string sessionName(uint32_t id) {
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 
-int main() {
+int main(int argc, char** argv) {
     Logger::init("terminal");
+
+    // --open <script> (a shell script opened from Files / search): run it with
+    // sh in a new tab instead of reattaching to the last session.
+    std::string script;
+    for (int i = 1; i + 1 < argc; ++i)
+        if (std::string(argv[i]) == "--open") { script = argv[i + 1]; break; }
     LOG_INFO("Starting Terminal (multiplexer mode)…");
 
     // ── Tab bar container ─────────────────────────────────────────────────────
@@ -734,16 +740,22 @@ int main() {
                             (*load_sessions_page)(lp.page_ + 1);
                     } else {
                         // All sessions loaded — attach to the most recent one
-                        if (!g_sessions.empty()) {
+                        if (!g_sessions.empty() && script.empty()) {
                             g_primary_id = g_sessions.back().id;
                             attachSession(g_primary_id);
                         } else {
                             // No existing sessions — create a fresh one
                             createSession("", 80, 24,
-                                [](uint32_t id, const std::string& name) {
+                                [script](uint32_t id, const std::string& name) {
                                 if (!id) return;
                                 g_sessions.push_back({id, name, true});
                                 g_primary_id = id;
+                                if (!script.empty()) {
+                                    std::string q = "'";
+                                    for (char c : script) q += c == '\'' ? std::string("'\\''") : std::string(1, c);
+                                    std::string cmd = "sh " + q + "'\n";
+                                    sendInput(id, cmd.data(), cmd.size());
+                                }
                                 if (g_rebuild_tabs)  g_rebuild_tabs();
                                 if (g_rebuild_panes) g_rebuild_panes();
                             });
