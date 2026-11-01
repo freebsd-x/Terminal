@@ -266,8 +266,11 @@ public:
         const size_t first = lines_.size() > fit ? lines_.size() - fit : 0;
         if (rebuild_ || first != first_) {
             clearChildren();
-            for (size_t i = first; i < lines_.size(); ++i)
-                addChild(std::make_shared<RenderText>(lines_[i], kFontSize));
+            for (size_t i = first; i < lines_.size(); ++i) {
+                auto line = std::make_shared<RenderText>(lines_[i], kFontSize);
+                line->setFontFamily("monospace");   // columns line up
+                addChild(line);
+            }
             first_ = first;
             rebuild_ = false;
         }
