@@ -245,15 +245,75 @@ private:
     std::string current_line_;
 };
 
+// The visible terminal text: the newest lines that fit the pane, one RenderText
+// per line, top to bottom. (A single RenderText drew the whole scrollback on
+// one line — it doesn't break at '\n'.)
+class RenderTermLines : public RenderNode {
+public:
+    static constexpr float kFontSize = 13.0f;
+    static constexpr float kLineH    = 17.0f;
+    static constexpr float kPad      = 6.0f;
+
+    void setLines(std::vector<std::string> lines) noexcept {
+        if (lines != lines_) { lines_ = std::move(lines); rebuild_ = true; }
+    }
+
+    [[nodiscard]] Size performLayout(const Constraints& c) noexcept override {
+        const float w = c.max_width_;
+        const float h = c.max_height_ < 50000.0f ? c.max_height_
+                                                 : kPad * 2 + kLineH * static_cast<float>(lines_.size());
+        const size_t fit = std::max<size_t>(1, static_cast<size_t>((h - kPad * 2) / kLineH));
+        const size_t first = lines_.size() > fit ? lines_.size() - fit : 0;
+        if (rebuild_ || first != first_) {
+            clearChildren();
+            for (size_t i = first; i < lines_.size(); ++i)
+                addChild(std::make_shared<RenderText>(lines_[i], kFontSize));
+            first_ = first;
+            rebuild_ = false;
+        }
+        float y = kPad;
+        for (const auto& line : children()) {
+            (void)line->layout({0.0f, std::max(0.0f, w - kPad * 2), 0.0f, kLineH});
+            line->setOffset({kPad, y});
+            y += kLineH;
+        }
+        return c.clamp({w, h});
+    }
+    void paintSelf(fbx::xrender::DisplayList&, Offset) noexcept override {}
+
+private:
+    std::vector<std::string> lines_;
+    size_t first_ = 0;
+    bool   rebuild_ = true;
+};
+
+// The screen lines of terminal output: split at '\n'; within a line a '\r'
+// returns to the start, so only the text after the last one with content
+// shows (the shell redraws its prompt that way).
+static std::vector<std::string> screenLines(const std::string& out) {
+    std::vector<std::string> lines;
+    size_t start = 0;
+    while (start <= out.size()) {
+        size_t nl = out.find('\n', start);
+        if (nl == std::string::npos) nl = out.size();
+        std::string line = out.substr(start, nl - start);
+        while (!line.empty() && line.back() == '\r') line.pop_back();
+        if (auto cr = line.rfind('\r'); cr != std::string::npos) line = line.substr(cr + 1);
+        lines.push_back(std::move(line));
+        start = nl + 1;
+    }
+    return lines;
+}
+
 class TerminalElement : public Element {
 public:
     explicit TerminalElement(std::shared_ptr<TerminalWidget> widget)
     {
         widget_ = std::move(widget);
-        text_node_ = std::make_shared<RenderText>("", 12.0f);
+        lines_node_ = std::make_shared<RenderTermLines>();
         // The terminal grid is an editable text surface — show the I-beam.
-        text_node_->setCursor(CursorShape::Text);
-        renderNode_ = std::static_pointer_cast<RenderNode>(text_node_);
+        lines_node_->setCursor(CursorShape::Text);
+        renderNode_ = std::static_pointer_cast<RenderNode>(lines_node_);
     }
 
     void mount(std::shared_ptr<Element> parent) noexcept override {
@@ -267,7 +327,7 @@ public:
 
     void syncState() noexcept override {
         auto term = std::static_pointer_cast<TerminalWidget>(widget_);
-        text_node_->setText(term->getOutput());
+        lines_node_->setLines(screenLines(term->getOutput()));
     }
 
     [[nodiscard]] bool handleEvent(const InputMessage& ev) noexcept override {
@@ -364,7 +424,7 @@ public:
     }
 
 private:
-    std::shared_ptr<RenderText> text_node_;
+    std::shared_ptr<RenderTermLines> lines_node_;
 };
 
 std::shared_ptr<Element> TerminalWidget::createElement() noexcept {
